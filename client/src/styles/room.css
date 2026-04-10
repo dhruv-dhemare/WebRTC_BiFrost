@@ -221,6 +221,9 @@
 
 .leave-btn {
   padding: 0.875rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: 1px solid var(--border-color);
   border-radius: 8px;

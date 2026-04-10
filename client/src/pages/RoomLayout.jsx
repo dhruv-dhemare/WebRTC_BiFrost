@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import { Menu, X, Copy, MessageSquare, FileUp, Video, ArrowLeft, Check, Upload, File, Download, Mic, Camera } from 'lucide-react'
 import Logo from '../components/Logo'
 import '../styles/room.css'
 
@@ -6,9 +7,12 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
   const [activeTab, setActiveTab] = useState('chat')
   const [connectionStatus, setConnectionStatus] = useState('Connecting...')
   const [isSidebarOpen, setIsSidebarOpen] = useState(true)
+  const [isCopied, setIsCopied] = useState(false)
 
   const handleCopyRoomCode = () => {
     navigator.clipboard.writeText(roomCode)
+    setIsCopied(true)
+    setTimeout(() => setIsCopied(false), 2000)
   }
 
   const toggleSidebar = () => {
@@ -29,7 +33,7 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
         onClick={toggleSidebar}
         aria-label="Toggle sidebar"
       >
-        ☰
+        <Menu size={24} />
       </button>
 
       {/* Sidebar */}
@@ -42,7 +46,7 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
             onClick={toggleSidebar}
             aria-label="Close sidebar"
           >
-            ✕
+            <X size={24} />
           </button>
         </div>
 
@@ -52,12 +56,12 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
           <div className="room-code-display">
             <span className="room-code">{roomCode}</span>
             <button 
-              className="copy-btn"
+              className={`copy-btn ${isCopied ? 'copied' : ''}`}
               onClick={handleCopyRoomCode}
               aria-label="Copy room code"
               title="Copy room code"
             >
-              📋
+              {isCopied ? <Check size={20} style={{ color: 'green' }} /> : <Copy size={20} />}
             </button>
           </div>
         </div>
@@ -78,7 +82,7 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
             }}
             aria-label="Chat tab"
           >
-            <span className="tab-icon">💬</span>
+            <span className="tab-icon"><MessageSquare size={20} /></span>
             <span className="tab-label">Chat</span>
           </button>
           <button
@@ -89,7 +93,7 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
             }}
             aria-label="Files tab"
           >
-            <span className="tab-icon">📁</span>
+            <span className="tab-icon"><FileUp size={20} /></span>
             <span className="tab-label">Files</span>
           </button>
           <button
@@ -100,7 +104,7 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
             }}
             aria-label="Video tab"
           >
-            <span className="tab-icon">🎥</span>
+            <span className="tab-icon"><Video size={20} /></span>
             <span className="tab-label">Video</span>
           </button>
         </nav>
@@ -108,7 +112,7 @@ export default function RoomLayout({ roomCode, onLeaveRoom }) {
         {/* Sidebar Footer */}
         <div className="sidebar-footer">
           <button className="leave-btn" onClick={handleLeaveRoom} aria-label="Leave room">
-            ← Leave
+            <ArrowLeft size={20} /> Leave
           </button>
         </div>
       </aside>
@@ -173,7 +177,7 @@ function ChatView() {
           aria-label="Message input"
         />
         <button type="submit" className="send-btn" aria-label="Send message">
-          ✈️
+          <Check size={20} />
         </button>
       </form>
     </div>
@@ -200,7 +204,7 @@ function FilesView() {
       </div>
 
       <div className="drop-zone" onDrop={handleDrop} onDragOver={(e) => e.preventDefault()}>
-        <div className="drop-icon">📤</div>
+        <div className="drop-icon"><Upload size={32} /></div>
         <div className="drop-text">Drop files here</div>
         <div className="drop-subtext">or click to browse</div>
       </div>
@@ -208,7 +212,7 @@ function FilesView() {
       <div className="files-list">
         {files.map((file) => (
           <div key={file.id} className="file-item">
-            <div className="file-icon">📄</div>
+            <div className="file-icon"><File size={24} /></div>
             <div className="file-info">
               <div className="file-name">{file.name}</div>
               <div className="file-size">{file.size} · {file.status}</div>
@@ -219,7 +223,7 @@ function FilesView() {
               )}
             </div>
             <button className="file-action" aria-label={`Download ${file.name}`}>
-              ⬇️
+              <Download size={20} />
             </button>
           </div>
         ))}
@@ -238,7 +242,7 @@ function VideoView() {
 
       <div className="video-container">
         <div className="video-placeholder">
-          <div className="video-icon">🎥</div>
+          <div className="video-icon"><Video size={48} /></div>
           <div className="video-status">Waiting for peer...</div>
           <div className="video-info">Video will appear here</div>
         </div>
@@ -250,13 +254,13 @@ function VideoView() {
 
       <div className="video-controls">
         <button className="control-btn microphone" aria-label="Toggle microphone">
-          🎤
+          <Mic size={20} />
         </button>
         <button className="control-btn camera" aria-label="Toggle camera">
-          📷
+          <Camera size={20} />
         </button>
         <button className="control-btn end-call" aria-label="End call">
-          ✕
+          <X size={20} />
         </button>
       </div>
     </div>

@@ -172,6 +172,9 @@
 /* Primary Button */
 .btn-primary {
   width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 1rem 1.5rem;
   background: linear-gradient(90deg, #6366f1, #8b5cf6, #3b82f6);
   color: #ffffff;

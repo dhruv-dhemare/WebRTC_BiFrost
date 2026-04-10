@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Plus, ArrowRight } from 'lucide-react'
 
 export default function ActionPanel({ onCreateRoom, onJoinRoom }) {
   const [roomCode, setRoomCode] = useState('')
@@ -25,7 +26,7 @@ export default function ActionPanel({ onCreateRoom, onJoinRoom }) {
         type="button"
         aria-label="Create a new room for file sharing"
       >
-        + Create Room
+        <Plus size={20} /> Create Room
       </button>
 
       {/* Join Room Input Group */}
@@ -43,7 +44,7 @@ export default function ActionPanel({ onCreateRoom, onJoinRoom }) {
           className="btn-join"
           aria-label="Join room with code"
         >
-          →
+          <ArrowRight size={20} />
         </button>
       </form>
     </div>
