@@ -4,12 +4,13 @@ services:
     env: node
     region: oregon
     plan: starter
+    rootDir: server
     
-    # Build command - install all workspace dependencies
-    buildCommand: npm install && npm install --workspace=server
+    # Build command - install from repo root (workspaces mode)
+    buildCommand: npm install
     
-    # Start command - use full path from repo root
-    startCommand: node server/src/index.js
+    # Start command - runs from server directory due to rootDir
+    startCommand: node src/index.js
     
     # Environment variables (set these in Render dashboard)
     envVars:
