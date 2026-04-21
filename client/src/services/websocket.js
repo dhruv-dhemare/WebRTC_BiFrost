@@ -38,6 +38,18 @@ class WebSocketService {
         const protocol = this.url.startsWith('wss') ? '🔒 WSS (Encrypted)' : '⚠️  WS (Unencrypted)'
         console.log(`Connecting to ${protocol}: ${this.url}`)
         
+        // Safari/Brave specific settings
+        const userAgent = navigator.userAgent
+        const isSafari = /Safari/.test(userAgent) && !/Chrome/.test(userAgent)
+        const isBrave = /Brave/.test(userAgent)
+        
+        if (isSafari) {
+          console.log('🧏 Safari detected - using WSS with compatibility mode')
+        }
+        if (isBrave) {
+          console.log('🦁 Brave detected - ensuring privacy-friendly connection')
+        }
+        
         this.ws = new WebSocket(this.url)
 
         this.ws.onopen = () => {
@@ -52,18 +64,31 @@ class WebSocketService {
         }
 
         this.ws.onmessage = (event) => {
-          const message = JSON.parse(event.data)
-          console.log('📨 Message received:', message.type)
-          this.emit(message.type, message.payload)
+          try {
+            const message = JSON.parse(event.data)
+            console.log('📨 Message received:', message.type)
+            this.emit(message.type, message.payload)
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error)
+          }
         }
 
         this.ws.onerror = (error) => {
           console.error('✗ WebSocket error:', error)
-          // If WSS certificate error, provide helpful message
+          
+          // Safari/Brave specific troubleshooting
           if (this.url.startsWith('wss')) {
+            const userAgent = navigator.userAgent
+            if (/Safari/.test(userAgent) && !/Chrome/.test(userAgent)) {
+              console.log('💡 Safari: Try accepting the SSL certificate at https://' + this.url.split('://')[1].split(':')[0] + ':3000')
+            }
+            if (/Brave/.test(userAgent)) {
+              console.log('💡 Brave: Check Settings > Privacy > WebRTC - ensure Fingerprinting protection is not blocking')
+            }
             console.log('💡 Tip: Self-signed certificates may require browser acceptance')
             console.log('💡 Visit https://localhost:3000 in browser to accept the certificate')
           }
+          
           this.emit('error', error)
           reject(error)
         }

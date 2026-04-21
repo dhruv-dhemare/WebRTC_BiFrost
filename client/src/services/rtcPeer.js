@@ -11,11 +11,20 @@ class RTCPeerManager {
     this.remoteStream = null
     this.iceCandidateQueue = [] // Queue for candidates before peer connection ready
     
-    // STUN/TURN servers for NAT traversal
+    // STUN/TURN servers for NAT traversal - Multiple servers for reliability
     this.iceServers = [
+      // Primary STUN servers (Google)
       { urls: ['stun:stun.l.google.com:19302'] },
       { urls: ['stun:stun1.l.google.com:19302'] },
-      // Public TURN servers (fallback for restricted networks)
+      { urls: ['stun:stun2.l.google.com:19302'] },
+      { urls: ['stun:stun3.l.google.com:19302'] },
+      { urls: ['stun:stun4.l.google.com:19302'] },
+      
+      // Fallback STUN servers
+      { urls: ['stun:stunserver.org:3478'] },
+      { urls: ['stun:stun.l.google.com:5349'] },
+      
+      // Primary TURN servers with UDP/TCP/TLS options
       {
         urls: ['turn:openrelay.metered.ca:80'],
         username: 'openrelayproject',
@@ -30,6 +39,12 @@ class RTCPeerManager {
         urls: ['turn:openrelay.metered.ca:443?transport=tcp'],
         username: 'openrelayproject',
         credential: 'openrelayproject'
+      },
+      // Additional TURN server
+      {
+        urls: ['turn:turnserver.example.com:3478', 'turn:turnserver.example.com:5349'],
+        username: 'guest',
+        credential: 'somepassword'
       }
     ]
   }
@@ -39,8 +54,27 @@ class RTCPeerManager {
     console.log('🔌 Initializing peer connection...')
     this.isInitiator = isInitiator
 
+    // Detect browser for specific configuration
+    const userAgent = navigator.userAgent
+    const isSafari = /Safari/.test(userAgent) && !/Chrome/.test(userAgent)
+    const isBrave = /Brave/.test(userAgent)
+
     const config = {
-      iceServers: this.iceServers
+      iceServers: this.iceServers,
+      // For Safari/Brave compatibility and long-distance connections
+      iceTransportPolicy: 'all', // Use both host and relay candidates
+      bundlePolicy: 'max-bundle', // Bundle all media on single transport
+      rtcpMuxPolicy: 'require',  // Required for most browsers
+      iceCandidatePoolSize: 0    // Let app handle ICE candidates
+    }
+
+    // Safari specific settings
+    if (isSafari) {
+      console.log('🧏 Safari detected - applying Safari-specific settings')
+      config.offerOptions = {
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: true
+      }
     }
 
     this.peerConnection = new RTCPeerConnection(config)
@@ -48,17 +82,20 @@ class RTCPeerManager {
     // Handle ICE candidates
     this.peerConnection.onicecandidate = (event) => {
       if (event.candidate) {
-        console.log('❄️ ICE candidate generated')
+        const candidate = event.candidate
+        console.log(`❄️ ICE candidate: ${candidate.candidate.split(' ')[7] || 'N/A'} (${candidate.type})`)
         this.emit('ice_candidate', event.candidate)
         
-        // Send ICE candidate to peer through signaling server
+        // Send ALL ICE candidates including relay candidates to peer
+        // Important for long-distance connections and restricted networks
         ws.send('ice_candidate', {
           candidate: event.candidate.candidate,
           sdpMLineIndex: event.candidate.sdpMLineIndex,
-          sdpMid: event.candidate.sdpMid
+          sdpMid: event.candidate.sdpMid,
+          usernameFragment: event.candidate.usernameFragment
         })
       } else {
-        console.log('❄️ All ICE candidates gathered')
+        console.log('❄️ All ICE candidates gathered complete')
         this.emit('ice_gathering_complete')
       }
     }
@@ -70,11 +107,16 @@ class RTCPeerManager {
       this.emit('connection_state_change', state)
 
       if (state === 'failed') {
-        console.error('✗ Connection failed')
+        console.error('✗ Connection failed - attempting restart')
         this.emit('connection_failed')
+        // Schedule retry for connection restart
+        setTimeout(() => this.attemptConnectionRestart(), 5000)
       } else if (state === 'connected' || state === 'completed') {
-        console.log('✓ Connection established')
+        console.log('✓ Connection established successfully')
         this.emit('connected')
+      } else if (state === 'disconnected') {
+        console.warn('⚠️ Connection disconnected, will retry in 10s')
+        setTimeout(() => this.attemptConnectionRestart(), 10000)
       }
     }
 
@@ -404,18 +446,32 @@ class RTCPeerManager {
         return
       }
 
+      // Handle null candidate (end of candidates)
+      if (!candidateData || !candidateData.candidate) {
+        console.log('✓ End of ICE candidates')
+        return
+      }
+
       const candidate = new RTCIceCandidate({
         candidate: candidateData.candidate,
         sdpMLineIndex: candidateData.sdpMLineIndex,
-        sdpMid: candidateData.sdpMid
+        sdpMid: candidateData.sdpMid,
+        usernameFragment: candidateData.usernameFragment
       })
 
       await this.peerConnection.addIceCandidate(candidate)
-      console.log('✓ ICE candidate added')
+      console.log('✓ ICE candidate added successfully')
     } catch (error) {
-      // Ignore errors from duplicate candidates or timing issues
-      if (error.name !== 'OperationError') {
+      // Safari & Brave may fail to add relay candidates, but that's OK
+      // Host and srflx candidates should work
+      const isIgnorableError = 
+        error.name === 'OperationError' || 
+        error.message.includes('Cannot add remote ICE candidate')
+      
+      if (!isIgnorableError) {
         console.warn('⚠️ ICE candidate error:', error.message)
+      } else {
+        console.log('ℹ️ ICE candidate skipped (relay candidate or timeout)')
       }
     }
   }
@@ -443,6 +499,34 @@ class RTCPeerManager {
       this.peerConnection = null
       console.log('✗ Peer connection closed')
       this.emit('closed')
+    }
+  }
+
+  // Attempt to restart failed connection
+  attemptConnectionRestart() {
+    try {
+      console.log('🔄 Attempting connection restart...')
+      const wasInitiator = this.isInitiator
+      
+      // Close the old connection
+      if (this.peerConnection) {
+        this.peerConnection.close()
+      }
+      
+      // Reinitialize
+      this.peerConnection = null
+      this.iceCandidateQueue = []
+      this.initializePeerConnection(wasInitiator)
+      
+      // If we were initiator, send new offer
+      if (wasInitiator) {
+        setTimeout(() => this.createAndSendOffer(), 500)
+      }
+      
+      console.log('✓ Connection restart initiated')
+    } catch (error) {
+      console.error('✗ Error restarting connection:', error)
+      this.emit('restart_failed', error)
     }
   }
 

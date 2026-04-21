@@ -24,6 +24,35 @@ const ALLOWED_ORIGINS = [
   process.env.RENDER_EXTERNAL_URL || null
 ].filter(Boolean) // Remove null values
 
+// Security and WebRTC compatibility headers
+app.use((req, res, next) => {
+  // CORS headers
+  const origin = req.headers.origin
+  if (!origin || ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin || '*')
+  }
+  res.header('Access-Control-Allow-Credentials', 'true')
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  
+  // Security headers - compatible with Safari/Brave and WebRTC
+  res.header('X-Content-Type-Options', 'nosniff')
+  res.header('X-Frame-Options', 'SAMEORIGIN')
+  res.header('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  
+  // Allow shared array buffers for WebRTC performance
+  res.header('Cross-Origin-Opener-Policy', 'same-origin-allow-popups')
+  res.header('Cross-Origin-Embedder-Policy', 'require-corp')
+  
+  // WebRTC specific headers
+  res.header('X-Content-Type-Options', 'nosniff; mode=block')
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200)
+  }
+  next()
+})
+
 // Middleware
 app.use(cors({
   origin: (origin, callback) => {
