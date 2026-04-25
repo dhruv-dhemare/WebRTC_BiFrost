@@ -135,6 +135,10 @@ class MultiPeerManager {
     }
 
     this.peers.set(peerId, peerData)
+    
+    // Emit peer_initialized event immediately (not waiting for connection)
+    this.emit('peer_initialized', { peerId, userName, isInitiator })
+    console.log(`✓ Peer initialized: ${peerId} (${userName}) as ${isInitiator ? 'initiator' : 'responder'}`)
 
     // If we're the initiator, create the offer
     if (isInitiator) {

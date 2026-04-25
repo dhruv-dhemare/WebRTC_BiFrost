@@ -12,6 +12,7 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
   const [isCopied, setIsCopied] = useState(false)
   const [localStream, setLocalStream] = useState(null)
   const [remotePeers, setRemotePeers] = useState(new Map()) // peerId -> { stream, userName }
+  const [connectedPeers, setConnectedPeers] = useState(new Map()) // peerId -> { userName, connected: true }
   const [isVideoEnabled, setIsVideoEnabled] = useState(false)
   const [isAudioEnabled, setIsAudioEnabled] = useState(false)
   const [roomUsers, setRoomUsers] = useState([]) // All users in the room
@@ -182,14 +183,34 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
         })
         
         // Handle peer connection state changes
+        multiPeerManager.on('peer_initialized', (data) => {
+          console.log(`🔌 Peer initialized: ${data.userName} (${data.isInitiator ? 'initiator' : 'responder'})`)
+          // Track peer immediately (before fully connected)
+          setConnectedPeers(prev => new Map(prev).set(data.peerId, {
+            userName: data.userName,
+            connected: false
+          }))
+        })
+        
         multiPeerManager.on('peer_connected', (data) => {
           console.log(`✓ Connected to ${data.userName}`)
           setConnectionStatus(`Connected to ${data.userName}`)
+          // Update peer status to connected
+          setConnectedPeers(prev => new Map(prev).set(data.peerId, {
+            userName: data.userName,
+            connected: true
+          }))
         })
         
         multiPeerManager.on('peer_disconnected', (data) => {
           console.log(`✗ Disconnected from ${data.userName}`)
+          // Remove from both video peers and connected peers
           setRemotePeers(prev => {
+            const updated = new Map(prev)
+            updated.delete(data.peerId)
+            return updated
+          })
+          setConnectedPeers(prev => {
             const updated = new Map(prev)
             updated.delete(data.peerId)
             return updated
@@ -316,11 +337,19 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
 
   // Send message to all peers
   const sendMessage = (message) => {
-    const peers = Array.from(remotePeers.keys())
+    // Use connectedPeers for messaging (includes peers without video)
+    const peers = Array.from(connectedPeers.keys())
+    console.log(`📤 Sending message to ${peers.length} connected peers:`, Array.from(connectedPeers.values()).map(p => p.userName))
     let sent = false
+    
+    if (peers.length === 0) {
+      console.warn('⚠️ No connected peers to send message to')
+      return false
+    }
     
     peers.forEach(peerId => {
       if (multiPeerManager.sendMessage(peerId, 'chat', { type: 'text', text: message })) {
+        console.log(`✓ Message sent to peer ${peerId}`)
         sent = true
       }
     })
@@ -455,7 +484,7 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
       {/* Main Content Area */}
       <main className="room-main">
         <div className="room-content">
-          {activeTab === 'chat' && <ChatView onSendMessage={sendMessage} userName={userName} />}
+          {activeTab === 'chat' && <ChatView onSendMessage={sendMessage} userName={userName} connectedPeers={connectedPeers} />}
           {activeTab === 'files' && <FilesView />}
           {activeTab === 'video' && (
             <VideoView 
@@ -476,7 +505,7 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
   )
 }
 
-function ChatView({ onSendMessage, userName }) {
+function ChatView({ onSendMessage, userName, connectedPeers }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const messagesEndRef = useRef(null)
@@ -488,15 +517,19 @@ function ChatView({ onSendMessage, userName }) {
       const text = data.text || data
       const peerId = data.peerId || 'unknown'
       
+      // Look up peer name from connectedPeers
+      const peerName = connectedPeers?.get(peerId)?.userName || 'Unknown User'
+      
       const newMessage = {
         id: Date.now(),
         text: text,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         sender: 'peer',
         peerId: peerId,
-        peerName: 'Peer' // This will be updated if we track it
+        peerName: peerName
       }
       
+      console.log(`✓ Message from ${peerName}: ${text}`)
       setMessages(prev => [...prev, newMessage])
     }
 
@@ -506,7 +539,7 @@ function ChatView({ onSendMessage, userName }) {
     return () => {
       multiPeerManager.off('text_message', handleMessage)
     }
-  }, [])
+  }, [connectedPeers])
 
   // Auto-scroll to latest message
   useEffect(() => {
