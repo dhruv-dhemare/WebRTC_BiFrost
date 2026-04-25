@@ -17,6 +17,7 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
   const [isAudioEnabled, setIsAudioEnabled] = useState(false)
   const [roomUsers, setRoomUsers] = useState([]) // All users in the room
   const [myClientId, setMyClientId] = useState(null)
+  const myClientIdRef = useRef(null)
   
   // Track if we've already sent the create/join message
   const hasInitialized = useRef(false)
@@ -26,6 +27,229 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
 
   // Connect to WebSocket on mount
   useEffect(() => {
+    // 1. Define handlers
+    const handleConnected = () => {
+      setConnectionStatus('Connected to server')
+    }
+
+    const handleJoinError = (data) => {
+      console.error('❌ Server error:', JSON.stringify(data, null, 2))
+      const errorMsg = data?.message || 'Server error'
+      const roomId = data?.roomId || roomCode
+      const availableRooms = data?.available_rooms || 'NONE'
+      
+      setConnectionStatus(`❌ ${errorMsg}`)
+      
+      console.log(`🔍 Debugging Info:`)
+      console.log(`   Room attempted: ${roomId}`)
+      console.log(`   Available rooms: ${availableRooms}`)
+      console.log(`   Raw error data:`, data)
+      
+      if (availableRooms && availableRooms !== 'NONE') {
+        console.log('✅ Rooms available:', availableRooms)
+      } else {
+        console.log('⚠️ No rooms on server. The room may have expired or server restarted.')
+        
+        // Auto-retry if join failed and we haven't exceeded max retries
+        if (!isCreator && joinRetryCount.current < maxRetries) {
+          const retryDelay = 2000 * (joinRetryCount.current + 1) // Exponential backoff: 2s, 4s, 6s
+          joinRetryCount.current++
+          
+          console.log(`🔄 Retrying join in ${retryDelay / 1000}s (Attempt ${joinRetryCount.current}/${maxRetries})`)
+          setConnectionStatus(`⏳ Retrying... (${joinRetryCount.current}/${maxRetries})`)
+          
+          joinRetryTimeoutRef.current = setTimeout(() => {
+            console.log(`🔄 Retrying join for room: ${roomCode}`)
+            ws.send('join', { roomId: roomCode, userName })
+          }, retryDelay)
+        } else if (!isCreator && joinRetryCount.current >= maxRetries) {
+          console.log('❌ Max join retries exceeded')
+          setConnectionStatus('❌ Room connection failed. Please create a new room.')
+        } else {
+          console.log('💡 Solution: Try creating a new room and joining immediately')
+        }
+      }
+    }
+
+    const handleRoomCreated = (data) => {
+      console.log('🏠 Room created:', data.roomId, 'Client ID:', data.clientId)
+      
+      // Reset retry count on successful room creation
+      joinRetryCount.current = 0
+      if (joinRetryTimeoutRef.current) {
+        clearTimeout(joinRetryTimeoutRef.current)
+      }
+      
+      setRoomCode(data.roomId)
+      setMyClientId(data.clientId)
+      myClientIdRef.current = data.clientId
+      setRoomUsers(data.users || [])
+      setConnectionStatus('Room created, waiting for others...')
+    }
+
+    const handleJoinConfirmed = (data) => {
+      console.log('✓ Joined room:', data.roomId, 'Client ID:', data.clientId)
+      
+      // Reset retry count on successful join
+      joinRetryCount.current = 0
+      if (joinRetryTimeoutRef.current) {
+        clearTimeout(joinRetryTimeoutRef.current)
+      }
+      
+      setRoomCode(data.roomId)
+      setMyClientId(data.clientId)
+      myClientIdRef.current = data.clientId
+      setRoomUsers(data.users || [])
+      setConnectionStatus('Joined room')
+      
+      // Initialize peer connections with existing users
+      const otherUsers = data.users.filter(u => u.clientId !== data.clientId)
+      otherUsers.forEach(user => {
+        console.log(`👥 Initializing peer connection as responder for ${user.name}`)
+        multiPeerManager.initializePeerConnection(user.clientId, false, user.name)
+      })
+    }
+
+    const handleUserJoined = (data) => {
+      console.log('👥 New user joined:', data.newUser.name)
+      setRoomUsers(data.users || [])
+      setConnectionStatus(`${data.newUser.name} joined the room`)
+      
+      // Initialize as initiator for the new user
+      if (myClientIdRef.current && data.newUser.clientId !== myClientIdRef.current) {
+        console.log(`👥 Initializing peer connection as initiator for ${data.newUser.name}`)
+        multiPeerManager.initializePeerConnection(data.newUser.clientId, true, data.newUser.name)
+      }
+    }
+
+    const handleUserLeft = (data) => {
+      console.log('👋 User left:', data.leftUserName, `(${data.leftUserId})`)
+      setRoomUsers(data.users || [])
+      setConnectionStatus(`${data.leftUserName} left the room`)
+      
+      // Close peer connection and clean up all references
+      console.log(`🧹 Cleaning up peer: ${data.leftUserId}`)
+      multiPeerManager.closePeer(data.leftUserId)
+      
+      // Update both peer maps
+      setRemotePeers(prev => {
+        const updated = new Map(prev)
+        updated.delete(data.leftUserId)
+        console.log(`🗑️ Removed from remotePeers: ${data.leftUserId}, remaining: ${updated.size}`)
+        return updated
+      })
+      setConnectedPeers(prev => {
+        const updated = new Map(prev)
+        updated.delete(data.leftUserId)
+        console.log(`🗑️ Removed from connectedPeers: ${data.leftUserId}, remaining: ${updated.size}`)
+        return updated
+      })
+    }
+
+    const handleOffer = (data) => {
+      console.log('📤 Received offer from', data.fromName)
+      multiPeerManager.handleOffer(data.fromId, data.sdp, data.fromName)
+    }
+
+    const handleAnswer = (data) => {
+      console.log('📥 Received answer from', data.fromName)
+      multiPeerManager.handleAnswer(data.fromId, data.sdp)
+    }
+
+    const handleIceCandidate = (data) => {
+      console.log('❄️ Received ICE candidate from', data.fromId)
+      multiPeerManager.handleIceCandidate(
+        data.fromId,
+        data.candidate,
+        data.sdpMLineIndex,
+        data.sdpMid,
+        data.usernameFragment
+      )
+    }
+
+    const handlePeerInitialized = (data) => {
+      console.log(`🔌 Peer initialized: ${data.userName} (${data.isInitiator ? 'initiator' : 'responder'})`)
+      // Track peer immediately (before fully connected)
+      setConnectedPeers(prev => new Map(prev).set(data.peerId, {
+        userName: data.userName,
+        connected: false
+      }))
+    }
+
+    const handlePeerConnected = (data) => {
+      console.log(`✓ Connected to ${data.userName}`)
+      setConnectionStatus(`Connected to ${data.userName}`)
+      // Update peer status to connected
+      setConnectedPeers(prev => new Map(prev).set(data.peerId, {
+        userName: data.userName,
+        connected: true
+      }))
+    }
+
+    const handlePeerDisconnected = (data) => {
+      console.log(`✗ Disconnected from ${data.userName} (${data.peerId})`)
+      // Remove from both video peers and connected peers immediately
+      setRemotePeers(prev => {
+        const updated = new Map(prev)
+        updated.delete(data.peerId)
+        console.log(`🗑️ Removed from remotePeers: ${data.peerId}, remaining: ${updated.size}`)
+        return updated
+      })
+      setConnectedPeers(prev => {
+        const updated = new Map(prev)
+        updated.delete(data.peerId)
+        console.log(`🗑️ Removed from connectedPeers: ${data.peerId}, remaining: ${updated.size}`)
+        return updated
+      })
+    }
+
+    const handleRemoteStream = (data) => {
+      console.log(`🎥 Remote stream received from ${data.userName}`)
+      setRemotePeers(prev => new Map(prev).set(data.peerId, {
+        stream: data.stream,
+        userName: data.userName
+      }))
+    }
+
+    const handleConnectionStateChange = (data) => {
+      console.log(`Connection state for ${data.peerId}: ${data.state}`)
+    }
+
+    const handleDisconnected = () => {
+      setConnectionStatus('Disconnected')
+      multiPeerManager.closeAll()
+    }
+
+    const handleGenericError = (error) => {
+      console.error('WebSocket error:', error)
+      setConnectionStatus('Connection error')
+    }
+
+    const handleReconnectFailed = () => {
+      setConnectionStatus('Connection failed')
+    }
+
+    // 2. Register listeners
+    ws.on('connected', handleConnected)
+    ws.on('error', handleJoinError) // Handles join/create failures
+    ws.on('error', handleGenericError) // Handles generic WebSocket errors
+    ws.on('room_created', handleRoomCreated)
+    ws.on('join_confirmed', handleJoinConfirmed)
+    ws.on('user_joined', handleUserJoined)
+    ws.on('user_left', handleUserLeft)
+    ws.on('offer', handleOffer)
+    ws.on('answer', handleAnswer)
+    ws.on('ice_candidate', handleIceCandidate)
+    ws.on('disconnected', handleDisconnected)
+    ws.on('reconnect_failed', handleReconnectFailed)
+
+    multiPeerManager.on('peer_initialized', handlePeerInitialized)
+    multiPeerManager.on('peer_connected', handlePeerConnected)
+    multiPeerManager.on('peer_disconnected', handlePeerDisconnected)
+    multiPeerManager.on('remote_stream', handleRemoteStream)
+    multiPeerManager.on('connection_state_change', handleConnectionStateChange)
+
+    // 3. Connection logic
     const initWebSocket = async () => {
       try {
         setConnectionStatus('Connecting...')
@@ -43,219 +267,6 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
             ws.send('join', { roomId: roomCode, userName })
           }
         }
-        
-        // Update status when connected
-        ws.on('connected', () => {
-          setConnectionStatus('Connected to server')
-        })
-        
-        // Handle server errors (join/create failures)
-        ws.on('error', (data) => {
-          console.error('❌ Server error:', JSON.stringify(data, null, 2))
-          const errorMsg = data?.message || 'Server error'
-          const roomId = data?.roomId || roomCode
-          const availableRooms = data?.available_rooms || 'NONE'
-          
-          setConnectionStatus(`❌ ${errorMsg}`)
-          
-          console.log(`🔍 Debugging Info:`)
-          console.log(`   Room attempted: ${roomId}`)
-          console.log(`   Available rooms: ${availableRooms}`)
-          console.log(`   Raw error data:`, data)
-          
-          if (availableRooms && availableRooms !== 'NONE') {
-            console.log('✅ Rooms available:', availableRooms)
-          } else {
-            console.log('⚠️ No rooms on server. The room may have expired or server restarted.')
-            
-            // Auto-retry if join failed and we haven't exceeded max retries
-            if (!isCreator && joinRetryCount.current < maxRetries) {
-              const retryDelay = 2000 * (joinRetryCount.current + 1) // Exponential backoff: 2s, 4s, 6s
-              joinRetryCount.current++
-              
-              console.log(`🔄 Retrying join in ${retryDelay / 1000}s (Attempt ${joinRetryCount.current}/${maxRetries})`)
-              setConnectionStatus(`⏳ Retrying... (${joinRetryCount.current}/${maxRetries})`)
-              
-              joinRetryTimeoutRef.current = setTimeout(() => {
-                console.log(`🔄 Retrying join for room: ${roomCode}`)
-                ws.send('join', { roomId: roomCode, userName })
-              }, retryDelay)
-            } else if (!isCreator && joinRetryCount.current >= maxRetries) {
-              console.log('❌ Max join retries exceeded')
-              setConnectionStatus('❌ Room connection failed. Please create a new room.')
-            } else {
-              console.log('💡 Solution: Try creating a new room and joining immediately')
-            }
-          }
-        })
-        
-        // Handle room creation
-        ws.on('room_created', (data) => {
-          console.log('🏠 Room created:', data.roomId, 'Client ID:', data.clientId)
-          
-          // Reset retry count on successful room creation
-          joinRetryCount.current = 0
-          if (joinRetryTimeoutRef.current) {
-            clearTimeout(joinRetryTimeoutRef.current)
-          }
-          
-          setRoomCode(data.roomId)
-          setMyClientId(data.clientId)
-          setRoomUsers(data.users || [])
-          setConnectionStatus('Room created, waiting for others...')
-        })
-        
-        // Handle join confirmation
-        ws.on('join_confirmed', (data) => {
-          console.log('✓ Joined room:', data.roomId, 'Client ID:', data.clientId)
-          
-          // Reset retry count on successful join
-          joinRetryCount.current = 0
-          if (joinRetryTimeoutRef.current) {
-            clearTimeout(joinRetryTimeoutRef.current)
-          }
-          
-          setRoomCode(data.roomId)
-          setMyClientId(data.clientId)
-          setRoomUsers(data.users || [])
-          setConnectionStatus('Joined room')
-          
-          // Initialize peer connections with existing users
-          const otherUsers = data.users.filter(u => u.clientId !== data.clientId)
-          otherUsers.forEach(user => {
-            console.log(`👥 Initializing peer connection as responder for ${user.name}`)
-            multiPeerManager.initializePeerConnection(user.clientId, false, user.name)
-          })
-        })
-        
-        // When a new user joins
-        ws.on('user_joined', (data) => {
-          console.log('👥 New user joined:', data.newUser.name)
-          setRoomUsers(data.users || [])
-          setConnectionStatus(`${data.newUser.name} joined the room`)
-          
-          // Initialize as initiator for the new user
-          if (myClientId && data.newUser.clientId !== myClientId) {
-            console.log(`👥 Initializing peer connection as initiator for ${data.newUser.name}`)
-            multiPeerManager.initializePeerConnection(data.newUser.clientId, true, data.newUser.name)
-          }
-        })
-        
-        // When a user leaves
-        ws.on('user_left', (data) => {
-          console.log('👋 User left:', data.leftUserName, `(${data.leftUserId})`)
-          setRoomUsers(data.users || [])
-          setConnectionStatus(`${data.leftUserName} left the room`)
-          
-          // Close peer connection and clean up all references
-          console.log(`🧹 Cleaning up peer: ${data.leftUserId}`)
-          multiPeerManager.closePeer(data.leftUserId)
-          
-          // Update both peer maps
-          setRemotePeers(prev => {
-            const updated = new Map(prev)
-            updated.delete(data.leftUserId)
-            console.log(`🗑️ Removed from remotePeers: ${data.leftUserId}, remaining: ${updated.size}`)
-            return updated
-          })
-          setConnectedPeers(prev => {
-            const updated = new Map(prev)
-            updated.delete(data.leftUserId)
-            console.log(`🗑️ Removed from connectedPeers: ${data.leftUserId}, remaining: ${updated.size}`)
-            return updated
-          })
-        })
-        
-        // Handle incoming offer
-        ws.on('offer', (data) => {
-          console.log('📤 Received offer from', data.fromName)
-          multiPeerManager.handleOffer(data.fromId, data.sdp, data.fromName)
-        })
-        
-        // Handle incoming answer
-        ws.on('answer', (data) => {
-          console.log('📥 Received answer from', data.fromName)
-          multiPeerManager.handleAnswer(data.fromId, data.sdp)
-        })
-        
-        // Handle incoming ICE candidate
-        ws.on('ice_candidate', (data) => {
-          console.log('❄️ Received ICE candidate from', data.fromId)
-          multiPeerManager.handleIceCandidate(
-            data.fromId,
-            data.candidate,
-            data.sdpMLineIndex,
-            data.sdpMid,
-            data.usernameFragment
-          )
-        })
-        
-        // Handle peer connection state changes
-        multiPeerManager.on('peer_initialized', (data) => {
-          console.log(`🔌 Peer initialized: ${data.userName} (${data.isInitiator ? 'initiator' : 'responder'})`)
-          // Track peer immediately (before fully connected)
-          setConnectedPeers(prev => new Map(prev).set(data.peerId, {
-            userName: data.userName,
-            connected: false
-          }))
-        })
-        
-        multiPeerManager.on('peer_connected', (data) => {
-          console.log(`✓ Connected to ${data.userName}`)
-          setConnectionStatus(`Connected to ${data.userName}`)
-          // Update peer status to connected
-          setConnectedPeers(prev => new Map(prev).set(data.peerId, {
-            userName: data.userName,
-            connected: true
-          }))
-        })
-        
-        multiPeerManager.on('peer_disconnected', (data) => {
-          console.log(`✗ Disconnected from ${data.userName} (${data.peerId})`)
-          // Remove from both video peers and connected peers immediately
-          setRemotePeers(prev => {
-            const updated = new Map(prev)
-            updated.delete(data.peerId)
-            console.log(`🗑️ Removed from remotePeers: ${data.peerId}, remaining: ${updated.size}`)
-            return updated
-          })
-          setConnectedPeers(prev => {
-            const updated = new Map(prev)
-            updated.delete(data.peerId)
-            console.log(`🗑️ Removed from connectedPeers: ${data.peerId}, remaining: ${updated.size}`)
-            return updated
-          })
-        })
-
-        // Handle remote stream
-        multiPeerManager.on('remote_stream', (data) => {
-          console.log(`🎥 Remote stream received from ${data.userName}`)
-          setRemotePeers(prev => new Map(prev).set(data.peerId, {
-            stream: data.stream,
-            userName: data.userName
-          }))
-        })
-
-        // Handle connection_state_change
-        multiPeerManager.on('connection_state_change', (data) => {
-          console.log(`Connection state for ${data.peerId}: ${data.state}`)
-        })
-        
-        // Handle disconnection
-        ws.on('disconnected', () => {
-          setConnectionStatus('Disconnected')
-          multiPeerManager.closeAll()
-        })
-        
-        // Handle errors
-        ws.on('error', (error) => {
-          console.error('WebSocket error:', error)
-          setConnectionStatus('Connection error')
-        })
-        
-        ws.on('reconnect_failed', () => {
-          setConnectionStatus('Connection failed')
-        })
       } catch (error) {
         console.error('Failed to initialize:', error)
         setConnectionStatus('Connection failed')
@@ -264,19 +275,39 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
 
     initWebSocket()
 
-    // Cleanup on unmount
+    // 4. Cleanup on unmount
     return () => {
       // Clear any pending join retries
       if (joinRetryTimeoutRef.current) {
         clearTimeout(joinRetryTimeoutRef.current)
       }
       
+      // Remove all event listeners
+      ws.off('connected', handleConnected)
+      ws.off('error', handleJoinError)
+      ws.off('error', handleGenericError)
+      ws.off('room_created', handleRoomCreated)
+      ws.off('join_confirmed', handleJoinConfirmed)
+      ws.off('user_joined', handleUserJoined)
+      ws.off('user_left', handleUserLeft)
+      ws.off('offer', handleOffer)
+      ws.off('answer', handleAnswer)
+      ws.off('ice_candidate', handleIceCandidate)
+      ws.off('disconnected', handleDisconnected)
+      ws.off('reconnect_failed', handleReconnectFailed)
+
+      multiPeerManager.off('peer_initialized', handlePeerInitialized)
+      multiPeerManager.off('peer_connected', handlePeerConnected)
+      multiPeerManager.off('peer_disconnected', handlePeerDisconnected)
+      multiPeerManager.off('remote_stream', handleRemoteStream)
+      multiPeerManager.off('connection_state_change', handleConnectionStateChange)
+      
       multiPeerManager.closeAll()
       if (ws.isConnected()) {
         ws.disconnect()
       }
     }
-  }, [isCreator, roomCode, userName])
+  }, [])
 
   const handleCopyRoomCode = () => {
     navigator.clipboard.writeText(roomCode)
