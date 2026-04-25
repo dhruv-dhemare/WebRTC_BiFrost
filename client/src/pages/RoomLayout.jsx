@@ -19,6 +19,9 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
   
   // Track if we've already sent the create/join message
   const hasInitialized = useRef(false)
+  const joinRetryCount = useRef(0)
+  const joinRetryTimeoutRef = useRef(null)
+  const maxRetries = 3
 
   // Connect to WebSocket on mount
   useEffect(() => {
@@ -63,13 +66,38 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
             console.log('✅ Rooms available:', availableRooms)
           } else {
             console.log('⚠️ No rooms on server. The room may have expired or server restarted.')
-            console.log('💡 Solution: Create a new room and join immediately')
+            
+            // Auto-retry if join failed and we haven't exceeded max retries
+            if (!isCreator && joinRetryCount.current < maxRetries) {
+              const retryDelay = 2000 * (joinRetryCount.current + 1) // Exponential backoff: 2s, 4s, 6s
+              joinRetryCount.current++
+              
+              console.log(`🔄 Retrying join in ${retryDelay / 1000}s (Attempt ${joinRetryCount.current}/${maxRetries})`)
+              setConnectionStatus(`⏳ Retrying... (${joinRetryCount.current}/${maxRetries})`)
+              
+              joinRetryTimeoutRef.current = setTimeout(() => {
+                console.log(`🔄 Retrying join for room: ${roomCode}`)
+                ws.send('join', { roomId: roomCode, userName })
+              }, retryDelay)
+            } else if (!isCreator && joinRetryCount.current >= maxRetries) {
+              console.log('❌ Max join retries exceeded')
+              setConnectionStatus('❌ Room connection failed. Please create a new room.')
+            } else {
+              console.log('💡 Solution: Try creating a new room and joining immediately')
+            }
           }
         })
         
         // Handle room creation
         ws.on('room_created', (data) => {
           console.log('🏠 Room created:', data.roomId, 'Client ID:', data.clientId)
+          
+          // Reset retry count on successful room creation
+          joinRetryCount.current = 0
+          if (joinRetryTimeoutRef.current) {
+            clearTimeout(joinRetryTimeoutRef.current)
+          }
+          
           setRoomCode(data.roomId)
           setMyClientId(data.clientId)
           setRoomUsers(data.users || [])
@@ -79,6 +107,13 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
         // Handle join confirmation
         ws.on('join_confirmed', (data) => {
           console.log('✓ Joined room:', data.roomId, 'Client ID:', data.clientId)
+          
+          // Reset retry count on successful join
+          joinRetryCount.current = 0
+          if (joinRetryTimeoutRef.current) {
+            clearTimeout(joinRetryTimeoutRef.current)
+          }
+          
           setRoomCode(data.roomId)
           setMyClientId(data.clientId)
           setRoomUsers(data.users || [])
@@ -200,6 +235,11 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
 
     // Cleanup on unmount
     return () => {
+      // Clear any pending join retries
+      if (joinRetryTimeoutRef.current) {
+        clearTimeout(joinRetryTimeoutRef.current)
+      }
+      
       multiPeerManager.closeAll()
       if (ws.isConnected()) {
         ws.disconnect()

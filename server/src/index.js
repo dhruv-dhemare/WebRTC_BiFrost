@@ -173,6 +173,16 @@ wss.on('connection', (ws) => {
                 users: createdJoin.users
               }
             }))
+          } else {
+            const errorMsg = createdJoin?.error || 'Failed to create room'
+            console.error(`❌ Room creation failed: ${errorMsg}`)
+            ws.send(JSON.stringify({
+              type: 'error',
+              payload: { 
+                message: `Failed to create room: ${errorMsg}`,
+                error: 'ROOM_CREATE_FAILED'
+              }
+            }))
           }
           break
 
@@ -424,6 +434,9 @@ server.listen(config.port, () => {
   console.log(`✓ Server running on http://localhost:${config.port}`)
   console.log(`✓ WebSocket server ready on ws://localhost:${config.port}`)
   console.log(`✓ Environment: ${config.nodeEnv}`)
+  
+  // Start room cleanup (every 1 hour)
+  roomManager.startCleanupInterval(3600000)
 })
 
 process.on('SIGTERM', () => {

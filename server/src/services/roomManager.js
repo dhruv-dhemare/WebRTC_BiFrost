@@ -1,9 +1,75 @@
 // Room Manager - Handles room creation, joining, and client tracking for multi-user WebRTC
+import fs from 'fs'
+import path from 'path'
+
 class RoomManager {
   constructor() {
     this.rooms = new Map() // roomId -> { users: Map<wsClient, {name, clientId}>, createdAt, userCount }
     this.userRooms = new Map() // wsClient -> roomId
     this.clientIds = new Map() // wsClient -> clientId (unique identifier for each connection)
+    
+    // File-based persistence
+    this.roomsFile = path.join(process.cwd(), 'data', 'rooms.json')
+    this.ensureDataDir()
+    this.loadRoomsFromDisk()
+  }
+
+  // Ensure data directory exists
+  ensureDataDir() {
+    const dataDir = path.dirname(this.roomsFile)
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true })
+      console.log(`📁 Created data directory: ${dataDir}`)
+    }
+  }
+
+  // Load rooms from disk (on startup)
+  loadRoomsFromDisk() {
+    try {
+      if (fs.existsSync(this.roomsFile)) {
+        const data = fs.readFileSync(this.roomsFile, 'utf-8')
+        const savedRooms = JSON.parse(data)
+        
+        // Restore rooms to memory, but only if created recently (< 1 hour)
+        const oneHourAgo = Date.now() - 3600000
+        let restored = 0
+        
+        for (const [roomId, roomData] of Object.entries(savedRooms)) {
+          if (roomData.createdAt > oneHourAgo) {
+            this.rooms.set(roomId, {
+              users: new Map(),
+              createdAt: roomData.createdAt,
+              userCount: 0,
+              preserved: true
+            })
+            restored++
+          }
+        }
+        
+        console.log(`📂 Loaded ${restored} rooms from disk (${this.rooms.size} total active)`)
+      }
+    } catch (err) {
+      console.warn('⚠️ Could not load rooms from disk:', err.message)
+    }
+  }
+
+  // Save rooms to disk
+  saveRoomsToDisk() {
+    try {
+      const roomsData = {}
+      
+      for (const [roomId, room] of this.rooms.entries()) {
+        roomsData[roomId] = {
+          createdAt: room.createdAt,
+          userCount: room.userCount,
+          preserved: room.preserved || false
+        }
+      }
+      
+      fs.writeFileSync(this.roomsFile, JSON.stringify(roomsData, null, 2))
+    } catch (err) {
+      console.error('❌ Failed to save rooms to disk:', err.message)
+    }
   }
 
   // Generate unique room ID
@@ -24,7 +90,11 @@ class RoomManager {
       createdAt: Date.now(),
       userCount: 0
     })
-    console.log(`🏠 Room created: ${roomId}`)
+    
+    // Persist to disk immediately
+    this.saveRoomsToDisk()
+    
+    console.log(`🏠 Room created: ${roomId} (${this.rooms.size} active)`)
     return roomId
   }
 
@@ -79,6 +149,9 @@ class RoomManager {
         this.rooms.delete(roomId)
         console.log(`🗑️ Room deleted: ${roomId}`)
       }
+      
+      // Persist changes
+      this.saveRoomsToDisk()
     }
 
     this.userRooms.delete(ws)
@@ -196,6 +269,35 @@ class RoomManager {
       available: 6 - room.users.size,
       isFull: room.users.size >= 6
     }
+  }
+
+  // Clean up old rooms (older than 24 hours)
+  cleanupOldRooms(maxAgeMs = 86400000) {
+    const now = Date.now()
+    let removed = 0
+
+    for (const [roomId, room] of this.rooms.entries()) {
+      // Only delete empty rooms or rooms older than maxAge
+      if (room.users.size === 0 && now - room.createdAt > maxAgeMs) {
+        this.rooms.delete(roomId)
+        removed++
+      }
+    }
+
+    if (removed > 0) {
+      this.saveRoomsToDisk()
+      console.log(`🧹 Cleaned up ${removed} old rooms`)
+    }
+
+    return removed
+  }
+
+  // Periodic cleanup - call this from server setup
+  startCleanupInterval(intervalMs = 3600000) {
+    setInterval(() => {
+      this.cleanupOldRooms()
+    }, intervalMs)
+    console.log(`🔄 Room cleanup scheduled every ${intervalMs / 1000} seconds`)
   }
 }
 
