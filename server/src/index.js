@@ -80,7 +80,7 @@ app.get('/health', (req, res) => {
 
 // Debug endpoint - list active rooms
 app.get('/api/debug/rooms', (req, res) => {
-  const rooms = Array.from(roomManager.rooms.entries()).map(([roomId, room]) => ({
+  const rooms = Array.from(roomManager.activeRooms.entries()).map(([roomId, room]) => ({
     roomId,
     userCount: room.userCount,
     users: Array.from(room.users.values()).map(u => ({ 
@@ -93,6 +93,7 @@ app.get('/api/debug/rooms', (req, res) => {
   }))
   res.json({ 
     activeRooms: rooms.length,
+    preservedRooms: roomManager.preservedRooms.size,
     rooms,
     timestamp: new Date().toISOString()
   })
@@ -238,12 +239,15 @@ wss.on('connection', (ws) => {
           } else {
             const errorMsg = joined?.error || 'Failed to join room'
             console.error(`❌ Join failed for ${roomId}: ${errorMsg}`)
+            const activeRooms = Array.from(roomManager.activeRooms.keys()).join(', ') || 'NONE'
+            const preservedRooms = Array.from(roomManager.preservedRooms.keys()).join(', ') || 'NONE'
             ws.send(JSON.stringify({
               type: 'error',
               payload: { 
                 message: `Failed to join room: ${errorMsg}`,
                 roomId: roomId,
-                available_rooms: Array.from(roomManager.rooms.keys()).join(', ') || 'NONE'
+                available_rooms: activeRooms,
+                preserved_rooms: preservedRooms
               }
             }))
           }

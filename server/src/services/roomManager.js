@@ -1,75 +1,13 @@
 // Room Manager - Handles room creation, joining, and client tracking for multi-user WebRTC
-import fs from 'fs'
-import path from 'path'
-
 class RoomManager {
   constructor() {
-    this.rooms = new Map() // roomId -> { users: Map<wsClient, {name, clientId}>, createdAt, userCount }
+    // Two separate stores: active rooms (with users) and preserved rooms (without users)
+    this.activeRooms = new Map() // roomId -> { users: Map<wsClient, {name, clientId}>, createdAt, userCount }
+    this.preservedRooms = new Map() // roomId -> { createdAt, initialCreatorName } - rooms without active users
     this.userRooms = new Map() // wsClient -> roomId
     this.clientIds = new Map() // wsClient -> clientId (unique identifier for each connection)
     
-    // File-based persistence
-    this.roomsFile = path.join(process.cwd(), 'data', 'rooms.json')
-    this.ensureDataDir()
-    this.loadRoomsFromDisk()
-  }
-
-  // Ensure data directory exists
-  ensureDataDir() {
-    const dataDir = path.dirname(this.roomsFile)
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true })
-      console.log(`📁 Created data directory: ${dataDir}`)
-    }
-  }
-
-  // Load rooms from disk (on startup)
-  loadRoomsFromDisk() {
-    try {
-      if (fs.existsSync(this.roomsFile)) {
-        const data = fs.readFileSync(this.roomsFile, 'utf-8')
-        const savedRooms = JSON.parse(data)
-        
-        // Restore rooms to memory, but only if created recently (< 1 hour)
-        const oneHourAgo = Date.now() - 3600000
-        let restored = 0
-        
-        for (const [roomId, roomData] of Object.entries(savedRooms)) {
-          if (roomData.createdAt > oneHourAgo) {
-            this.rooms.set(roomId, {
-              users: new Map(),
-              createdAt: roomData.createdAt,
-              userCount: 0,
-              preserved: true
-            })
-            restored++
-          }
-        }
-        
-        console.log(`📂 Loaded ${restored} rooms from disk (${this.rooms.size} total active)`)
-      }
-    } catch (err) {
-      console.warn('⚠️ Could not load rooms from disk:', err.message)
-    }
-  }
-
-  // Save rooms to disk
-  saveRoomsToDisk() {
-    try {
-      const roomsData = {}
-      
-      for (const [roomId, room] of this.rooms.entries()) {
-        roomsData[roomId] = {
-          createdAt: room.createdAt,
-          userCount: room.userCount,
-          preserved: room.preserved || false
-        }
-      }
-      
-      fs.writeFileSync(this.roomsFile, JSON.stringify(roomsData, null, 2))
-    } catch (err) {
-      console.error('❌ Failed to save rooms to disk:', err.message)
-    }
+    console.log('🚀 RoomManager initialized with in-memory persistence')
   }
 
   // Generate unique room ID
@@ -83,33 +21,54 @@ class RoomManager {
   }
 
   // Create a new room
-  createRoom() {
+  createRoom(creatorName = 'Creator') {
     const roomId = this.generateRoomId()
-    this.rooms.set(roomId, {
+    
+    // Create room in active store
+    this.activeRooms.set(roomId, {
       users: new Map(), // wsClient -> {name, clientId, joinedAt}
       createdAt: Date.now(),
-      userCount: 0
+      userCount: 0,
+      creatorName: creatorName
     })
     
-    // Persist to disk immediately
-    this.saveRoomsToDisk()
+    // Also add to preserved rooms so it survives if all users leave
+    this.preservedRooms.set(roomId, {
+      createdAt: Date.now(),
+      initialCreatorName: creatorName
+    })
     
-    console.log(`🏠 Room created: ${roomId} (${this.rooms.size} active)`)
+    console.log(`🏠 Room created: ${roomId} by ${creatorName} (Active: ${this.activeRooms.size}, Preserved: ${this.preservedRooms.size})`)
     return roomId
   }
 
   // Join a room
   joinRoom(roomId, ws, userName) {
     // List available rooms for debugging
-    console.log(`📋 Available rooms: ${Array.from(this.rooms.keys()).join(', ') || 'NONE'}`)
+    const activeList = Array.from(this.activeRooms.keys()).join(', ') || 'NONE'
+    const preservedList = Array.from(this.preservedRooms.keys()).join(', ') || 'NONE'
+    console.log(`📋 Looking for room: ${roomId}`)
+    console.log(`📋 Active rooms: ${activeList} | Preserved rooms: ${preservedList}`)
     
-    if (!this.rooms.has(roomId)) {
-      console.error(`❌ Room not found: ${roomId}. Available: ${Array.from(this.rooms.keys()).join(', ') || 'NONE'}`)
-      return { success: false, error: 'Room not found' }
+    // Check active rooms first
+    let room = this.activeRooms.get(roomId)
+    if (!room) {
+      // Check if it's a preserved room - reactivate it
+      if (this.preservedRooms.has(roomId)) {
+        console.log(`🔄 Reactivating preserved room: ${roomId}`)
+        room = {
+          users: new Map(),
+          createdAt: this.preservedRooms.get(roomId).createdAt,
+          userCount: 0,
+          reactivated: true
+        }
+        this.activeRooms.set(roomId, room)
+      } else {
+        console.error(`❌ Room not found: ${roomId}. Available Active: ${activeList}, Preserved: ${preservedList}`)
+        return { success: false, error: 'Room not found' }
+      }
     }
 
-    const room = this.rooms.get(roomId)
-    
     // Check if room is full (max 6 users)
     if (room.users.size >= 6) {
       console.warn(`❌ Room full: ${roomId} (${room.users.size}/6)`)
@@ -127,7 +86,7 @@ class RoomManager {
     this.userRooms.set(ws, roomId)
     this.clientIds.set(ws, clientId)
     
-    console.log(`👥 Client "${userName}" joined room ${roomId} (${room.users.size}/6 users)`)
+    console.log(`👥 Client "${userName}" joined room ${roomId} (${room.users.size}/6 users, Active: ${this.activeRooms.size})`)
     
     return { success: true, clientId, userCount: room.users.size, users: this.getRoomUsers(roomId) }
   }
@@ -137,21 +96,18 @@ class RoomManager {
     const roomId = this.userRooms.get(ws)
     if (!roomId) return null
 
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     if (room) {
       const userName = room.users.get(ws)?.name
       room.users.delete(ws)
       room.userCount = room.users.size
-      console.log(`👤 Client "${userName}" left room ${roomId} (${room.users.size}/6 remaining)`)
+      console.log(`👤 Client "${userName}" left room ${roomId} (${room.users.size}/6 remaining, Active: ${this.activeRooms.size})`)
 
-      // Delete room if empty
+      // Keep room in preserved store even if empty, so others can rejoin within TTL
       if (room.users.size === 0) {
-        this.rooms.delete(roomId)
-        console.log(`🗑️ Room deleted: ${roomId}`)
+        console.log(`✅ Room ${roomId} kept in preserved store (will auto-cleanup after 24h)`)
+        // Don't delete from activeRooms yet - it will be cleaned up by maintenance
       }
-      
-      // Persist changes
-      this.saveRoomsToDisk()
     }
 
     this.userRooms.delete(ws)
@@ -161,12 +117,12 @@ class RoomManager {
 
   // Get room info
   getRoom(roomId) {
-    return this.rooms.get(roomId)
+    return this.activeRooms.get(roomId)
   }
 
   // Get all users in a room with their details
   getRoomUsers(roomId) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     if (!room) return []
     
     return Array.from(room.users.entries()).map(([ws, userData]) => ({
@@ -178,7 +134,7 @@ class RoomManager {
 
   // Get clients (WebSocket connections) in a room
   getClients(roomId) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     return room ? Array.from(room.users.keys()) : []
   }
 
@@ -197,13 +153,13 @@ class RoomManager {
     const roomId = this.userRooms.get(ws)
     if (!roomId) return null
     
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     return room?.users.get(ws) || null
   }
 
   // Broadcast to all clients in a room except sender
   broadcast(roomId, message, excludeWs = null) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     if (!room) return
 
     const msgString = JSON.stringify(message)
@@ -217,7 +173,7 @@ class RoomManager {
 
   // Send to specific client in room
   send(roomId, message, targetWs) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     if (!room || !room.users.has(targetWs)) return
 
     if (targetWs.readyState === 1) {
@@ -227,7 +183,7 @@ class RoomManager {
 
   // Send to all except sender (for when sender is included)
   broadcastToAll(roomId, message) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     if (!room) return
 
     const msgString = JSON.stringify(message)
@@ -241,9 +197,10 @@ class RoomManager {
   // Get room stats
   getStats() {
     return {
-      totalRooms: this.rooms.size,
+      activeRooms: this.activeRooms.size,
+      preservedRooms: this.preservedRooms.size,
       totalClients: this.userRooms.size,
-      rooms: Array.from(this.rooms.entries()).map(([id, room]) => ({
+      rooms: Array.from(this.activeRooms.entries()).map(([id, room]) => ({
         id,
         users: room.users.size,
         maxUsers: 6,
@@ -255,13 +212,13 @@ class RoomManager {
 
   // Check if room is full
   isRoomFull(roomId) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     return room && room.users.size >= 6
   }
 
   // Get room capacity info
   getRoomCapacity(roomId) {
-    const room = this.rooms.get(roomId)
+    const room = this.activeRooms.get(roomId)
     if (!room) return null
     return {
       current: room.users.size,
@@ -271,25 +228,33 @@ class RoomManager {
     }
   }
 
-  // Clean up old rooms (older than 24 hours)
+  // Clean up old preserved rooms (older than 24 hours)
   cleanupOldRooms(maxAgeMs = 86400000) {
     const now = Date.now()
-    let removed = 0
+    let removedActive = 0
+    let removedPreserved = 0
 
-    for (const [roomId, room] of this.rooms.entries()) {
-      // Only delete empty rooms or rooms older than maxAge
+    // Clean up empty active rooms older than maxAge
+    for (const [roomId, room] of this.activeRooms.entries()) {
       if (room.users.size === 0 && now - room.createdAt > maxAgeMs) {
-        this.rooms.delete(roomId)
-        removed++
+        this.activeRooms.delete(roomId)
+        removedActive++
       }
     }
 
-    if (removed > 0) {
-      this.saveRoomsToDisk()
-      console.log(`🧹 Cleaned up ${removed} old rooms`)
+    // Clean up preserved rooms older than maxAge
+    for (const [roomId, room] of this.preservedRooms.entries()) {
+      if (now - room.createdAt > maxAgeMs) {
+        this.preservedRooms.delete(roomId)
+        removedPreserved++
+      }
     }
 
-    return removed
+    if (removedActive > 0 || removedPreserved > 0) {
+      console.log(`🧹 Cleaned up ${removedActive} old active rooms and ${removedPreserved} old preserved rooms`)
+    }
+
+    return removedActive + removedPreserved
   }
 
   // Periodic cleanup - call this from server setup
