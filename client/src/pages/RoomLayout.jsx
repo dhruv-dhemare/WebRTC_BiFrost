@@ -47,11 +47,23 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
         
         // Handle server errors (join/create failures)
         ws.on('error', (data) => {
-          console.error('❌ Server error:', data)
-          const errorMsg = data.message || 'Server error'
+          console.error('❌ Server error:', JSON.stringify(data, null, 2))
+          const errorMsg = data?.message || 'Server error'
+          const roomId = data?.roomId || roomCode
+          const availableRooms = data?.available_rooms || 'NONE'
+          
           setConnectionStatus(`❌ ${errorMsg}`)
-          if (data.available_rooms) {
-            console.log('📋 Available rooms:', data.available_rooms)
+          
+          console.log(`🔍 Debugging Info:`)
+          console.log(`   Room attempted: ${roomId}`)
+          console.log(`   Available rooms: ${availableRooms}`)
+          console.log(`   Raw error data:`, data)
+          
+          if (availableRooms && availableRooms !== 'NONE') {
+            console.log('✅ Rooms available:', availableRooms)
+          } else {
+            console.log('⚠️ No rooms on server. The room may have expired or server restarted.')
+            console.log('💡 Solution: Create a new room and join immediately')
           }
         })
         
