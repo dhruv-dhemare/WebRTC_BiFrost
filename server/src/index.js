@@ -221,6 +221,7 @@ wss.on('connection', (ws) => {
             // Notify other users in room about the new user
             if (userCount > 1) {
               const otherClients = roomManager.getClients(roomId).filter(c => c !== ws)
+              console.log(`📢 BROADCAST: ${joinerName} joined room ${roomId}, notifying ${otherClients.length} existing users`)
               otherClients.forEach(other => {
                 other.send(JSON.stringify({
                   type: 'user_joined',
