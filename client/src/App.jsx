@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import LandingPage from './pages/LandingPage'
 import RoomLayout from './pages/RoomLayout'
 import NameModal from './components/NameModal'
@@ -10,6 +10,16 @@ export default function App() {
   const [showNameModal, setShowNameModal] = useState(false)
   const [userName, setUserName] = useState('')
   const [pendingRoomCode, setPendingRoomCode] = useState(null)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const roomFromUrl = params.get('room')
+    if (roomFromUrl) {
+      setPendingRoomCode(roomFromUrl)
+      setIsCreator(false)
+      setShowNameModal(true)
+    }
+  }, [])
 
   const handleCreateRoom = () => {
     // Show name modal first

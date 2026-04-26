@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { Menu, X, Copy, MessageSquare, FileUp, Video, ArrowLeft, Check, Upload, File, Download, Mic, Camera, Users } from 'lucide-react'
+import { Menu, X, Copy, MessageSquare, FileUp, Video, ArrowLeft, Check, Upload, File, Download, Mic, Camera, Users, Smile } from 'lucide-react'
+import EmojiPicker from 'emoji-picker-react'
 import Logo from '../components/Logo'
 import '../styles/room.css'
 import ws from '../services/websocket'
@@ -310,7 +311,8 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
   }, [])
 
   const handleCopyRoomCode = () => {
-    navigator.clipboard.writeText(roomCode)
+    const link = `${window.location.origin}${window.location.pathname}?room=${roomCode}`
+    navigator.clipboard.writeText(link)
     setIsCopied(true)
     setTimeout(() => setIsCopied(false), 2000)
   }
@@ -558,7 +560,26 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
 function ChatView({ onSendMessage, userName, connectedPeers }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const messagesEndRef = useRef(null)
+  const pickerRef = useRef(null)
+
+  // Listen for clicks outside to close picker
+  useEffect(() => {
+    function handleClickOutside(event) {
+      if (pickerRef.current && !pickerRef.current.contains(event.target)) {
+        setShowEmojiPicker(false)
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside)
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside)
+    }
+  }, [pickerRef])
+
+  const onEmojiClick = (emojiObject) => {
+    setInput(prev => prev + emojiObject.emoji)
+  }
 
   // Listen for incoming messages
   useEffect(() => {
@@ -647,6 +668,21 @@ function ChatView({ onSendMessage, userName, connectedPeers }) {
       </div>
 
       <form onSubmit={handleSendMessage} className="chat-input-form">
+        <div className="emoji-container" ref={pickerRef}>
+          <button 
+            type="button" 
+            className="emoji-btn" 
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+            aria-label="Add emoji"
+          >
+            <Smile size={24} />
+          </button>
+          {showEmojiPicker && (
+            <div className="emoji-picker-wrapper">
+              <EmojiPicker onEmojiClick={onEmojiClick} theme="dark" />
+            </div>
+          )}
+        </div>
         <input
           type="text"
           className="chat-input"

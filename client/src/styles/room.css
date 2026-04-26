@@ -301,7 +301,7 @@
 .message.you {
   align-items: flex-end;
   margin-left: auto;
-  max-width: 100%;
+  max-width: 70%;
 }
 
 .message-bubble {
@@ -333,6 +333,40 @@
   display: flex;
   gap: 0.75rem;
   margin: 0 1.5rem 1.5rem 1.5rem;
+  position: relative;
+  align-items: center;
+}
+
+.emoji-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emoji-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  padding: 0.5rem;
+}
+
+.emoji-btn:hover {
+  color: var(--gradient-start);
+  transform: scale(1.1);
+}
+
+.emoji-picker-wrapper {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 1rem;
+  z-index: 100;
 }
 
 .chat-input {
