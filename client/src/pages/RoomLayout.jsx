@@ -228,25 +228,29 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
     const handleRemoteStream = (data) => {
       console.log(`🎥 Remote stream received from ${data.userName}`)
 
-      if (watchPartyStreamIdRef.current === data.stream.id || watchPartyHost === data.peerId) {
-        setWatchPartyStream(data.stream);
-        setRemotePeers(prev => {
-          const newMap = new Map(prev);
-          const existing = newMap.get(data.peerId) || { userName: data.userName };
-          newMap.set(data.peerId, { ...existing, watchPartyStream: data.stream });
-          return newMap;
-        });
-      } else {
+      // Since multiPeerManager bundles all tracks into peerData.remoteStream,
+      // data.stream is ALWAYS the single stream for this peer.
+      // If this peer is the host, it means this stream contains the watch party tracks!
+      setRemotePeers(prev => {
+        const newMap = new Map(prev)
+        const existing = newMap.get(data.peerId) || { userName: data.userName }
+        newMap.set(data.peerId, { ...existing, stream: data.stream })
+        return newMap
+      });
+
+      // Use setTimeout to avoid React warnings when setting state during render/events
+      setTimeout(() => {
         if (activeTabRef.current !== 'video') {
           setHasNewVideoUser(true)
         }
-        setRemotePeers(prev => {
-          const newMap = new Map(prev)
-          const existing = newMap.get(data.peerId) || { userName: data.userName }
-          newMap.set(data.peerId, { ...existing, stream: data.stream })
-          return newMap
+        
+        setWatchPartyHost(currentHost => {
+          if (currentHost === data.peerId) {
+            setWatchPartyStream(data.stream);
+          }
+          return currentHost;
         });
-      }
+      }, 0);
     }
 
     const handleConnectionStateChange = (data) => {
@@ -314,10 +318,8 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
         // If stream arrived earlier, assign it now
         setRemotePeers(prev => {
           const peerData = prev.get(data.peerId);
-          if (peerData && peerData.watchPartyStream) {
-            setWatchPartyStream(peerData.watchPartyStream);
-          } else if (peerData && peerData.stream && peerData.stream.id === data.streamId) {
-            setWatchPartyStream(peerData.stream);
+          if (peerData && peerData.stream) {
+            setTimeout(() => setWatchPartyStream(peerData.stream), 0);
           }
           return prev;
         });
@@ -656,7 +658,8 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
               watchPartyStream={watchPartyStream}
               onStartParty={async () => {
                 try {
-                  await multiPeerManager.getDisplayMedia();
+                  const stream = await multiPeerManager.getDisplayMedia();
+                  setWatchPartyStream(stream);
                   setWatchPartyHost(myClientId);
                   setWatchPartyHostName(userName);
                 } catch (e) {
