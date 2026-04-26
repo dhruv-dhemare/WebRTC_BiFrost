@@ -19,6 +19,20 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
   const [roomUsers, setRoomUsers] = useState([]) // All users in the room
   const [myClientId, setMyClientId] = useState(null)
   const myClientIdRef = useRef(null)
+
+  // Notification states
+  const activeTabRef = useRef(activeTab)
+  const [unreadChatCount, setUnreadChatCount] = useState(0)
+  const [unreadFilesCount, setUnreadFilesCount] = useState(0)
+  const [hasNewVideoUser, setHasNewVideoUser] = useState(false)
+
+  // Sync activeTab ref and reset notifications on tab change
+  useEffect(() => {
+    activeTabRef.current = activeTab
+    if (activeTab === 'chat') setUnreadChatCount(0)
+    if (activeTab === 'files') setUnreadFilesCount(0)
+    if (activeTab === 'video') setHasNewVideoUser(false)
+  }, [activeTab])
   
   // Track if we've already sent the create/join message
   const hasInitialized = useRef(false)
@@ -206,6 +220,9 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
 
     const handleRemoteStream = (data) => {
       console.log(`🎥 Remote stream received from ${data.userName}`)
+      if (activeTabRef.current !== 'video') {
+        setHasNewVideoUser(true)
+      }
       setRemotePeers(prev => new Map(prev).set(data.peerId, {
         stream: data.stream,
         userName: data.userName
@@ -249,6 +266,21 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
     multiPeerManager.on('peer_disconnected', handlePeerDisconnected)
     multiPeerManager.on('remote_stream', handleRemoteStream)
     multiPeerManager.on('connection_state_change', handleConnectionStateChange)
+
+    const handleTextMessageNotification = () => {
+      if (activeTabRef.current !== 'chat') {
+        setUnreadChatCount(prev => prev + 1)
+      }
+    }
+    
+    const handleFileNotification = () => {
+      if (activeTabRef.current !== 'files') {
+        setUnreadFilesCount(prev => prev + 1)
+      }
+    }
+
+    multiPeerManager.on('text_message', handleTextMessageNotification)
+    multiPeerManager.on('file_received', handleFileNotification)
 
     // 3. Connection logic
     const initWebSocket = async () => {
@@ -302,6 +334,9 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
       multiPeerManager.off('peer_disconnected', handlePeerDisconnected)
       multiPeerManager.off('remote_stream', handleRemoteStream)
       multiPeerManager.off('connection_state_change', handleConnectionStateChange)
+      
+      multiPeerManager.off('text_message', handleTextMessageNotification)
+      multiPeerManager.off('file_received', handleFileNotification)
       
       multiPeerManager.closeAll()
       if (ws.isConnected()) {
@@ -409,7 +444,7 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
     <div className="room-container">
       {/* Mobile Sidebar Toggle */}
       <button 
-        className="sidebar-toggle"
+        className={`sidebar-toggle ${isSidebarOpen ? 'hidden-on-mobile' : ''}`}
         onClick={toggleSidebar}
         aria-label="Toggle sidebar"
       >
@@ -494,7 +529,10 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
             }}
             aria-label="Chat tab"
           >
-            <span className="tab-icon"><MessageSquare size={20} /></span>
+            <span className="tab-icon">
+              <MessageSquare size={20} />
+              {unreadChatCount > 0 && <span className="notification-badge">{unreadChatCount > 99 ? '99+' : unreadChatCount}</span>}
+            </span>
             <span className="tab-label">Chat</span>
           </button>
           <button
@@ -505,7 +543,10 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
             }}
             aria-label="Files tab"
           >
-            <span className="tab-icon"><FileUp size={20} /></span>
+            <span className="tab-icon">
+              <FileUp size={20} />
+              {unreadFilesCount > 0 && <span className="notification-badge">{unreadFilesCount > 99 ? '99+' : unreadFilesCount}</span>}
+            </span>
             <span className="tab-label">Files</span>
           </button>
           <button
@@ -516,7 +557,10 @@ export default function RoomLayout({ roomCode, isCreator, userName, setRoomCode,
             }}
             aria-label="Video tab"
           >
-            <span className="tab-icon"><Video size={20} /></span>
+            <span className="tab-icon">
+              <Video size={20} />
+              {hasNewVideoUser && <span className="notification-badge dot"></span>}
+            </span>
             <span className="tab-label">Video</span>
           </button>
         </nav>
@@ -641,6 +685,13 @@ function ChatView({ onSendMessage, userName, connectedPeers }) {
     }
   }
 
+  const isOnlyEmojis = (text) => {
+    if (!text) return false;
+    const noSpace = text.replace(/[\s\n]/g, '');
+    if (noSpace.length === 0) return false;
+    return /^[\p{Emoji_Presentation}\p{Extended_Pictographic}]+$/u.test(noSpace);
+  };
+
   return (
     <div className="chat-view">
       <div className="chat-header">
@@ -654,15 +705,18 @@ function ChatView({ onSendMessage, userName, connectedPeers }) {
             No messages yet. Start the conversation!
           </div>
         ) : (
-          messages.map((msg) => (
-            <div key={msg.id} className={`message ${msg.sender}`}>
-              {msg.sender === 'peer' && (
-                <div className="message-sender">{msg.peerName || 'Peer'}</div>
-              )}
-              <div className="message-bubble">{msg.text}</div>
-              <div className="message-time">{msg.time}</div>
-            </div>
-          ))
+          messages.map((msg) => {
+            const emojiOnly = isOnlyEmojis(msg.text);
+            return (
+              <div key={msg.id} className={`message ${msg.sender} ${emojiOnly ? 'emoji-only' : ''}`}>
+                {msg.sender === 'peer' && (
+                  <div className="message-sender">{msg.peerName || 'Peer'}</div>
+                )}
+                <div className="message-bubble">{msg.text}</div>
+                <div className="message-time">{msg.time}</div>
+              </div>
+            );
+          })
         )}
         <div ref={messagesEndRef} />
       </div>
