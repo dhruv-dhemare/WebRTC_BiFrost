@@ -807,8 +807,12 @@ function ChatView({ onSendMessage, userName, connectedPeers }) {
 
       <div className="chat-messages">
         {messages.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#999', padding: '2rem' }}>
-            No messages yet. Start the conversation!
+          <div className="chat-empty-state">
+            <div className="empty-chat-icon">
+              <MessageSquare size={32} />
+            </div>
+            <h3>No messages yet</h3>
+            <p>Start the conversation with your peers in real-time!</p>
           </div>
         ) : (
           messages.map((msg) => {
@@ -816,7 +820,10 @@ function ChatView({ onSendMessage, userName, connectedPeers }) {
             return (
               <div key={msg.id} className={`message ${msg.sender} ${emojiOnly ? 'emoji-only' : ''}`}>
                 {msg.sender === 'peer' && (
-                  <div className="message-sender">{msg.peerName || 'Peer'}</div>
+                  <div className="message-sender">
+                    <span className="sender-avatar-dot" />
+                    {msg.peerName || 'Peer'}
+                  </div>
                 )}
                 <div className="message-bubble">{msg.text}</div>
                 <div className="message-time">{msg.time}</div>
