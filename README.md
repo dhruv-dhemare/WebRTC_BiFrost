@@ -2,6 +2,8 @@
 
 DigiCafe is a real-time, multi-user WebRTC application that allows users to instantly create and join rooms for group video calls, real-time messaging, and high-speed peer-to-peer file sharing.
 
+🌐 **Live Demo:** [Try DigiCafe](https://digicafe-frnds.vercel.app/)
+
 ## Features
 
 - **Multi-Peer Video Conferencing**: Join rooms with up to 6 participants for seamless video calls.
