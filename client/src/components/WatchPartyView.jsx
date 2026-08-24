@@ -35,7 +35,7 @@ export default function WatchPartyView({
         </div>
         <div className="watch-party-controls">
           {isHosting ? (
-            <button className="control-btn end-call" onClick={onStopParty}>
+            <button className="stop-party-btn" onClick={onStopParty}>
               <MonitorStop size={20} /> Stop Sharing
             </button>
           ) : !hostId ? (
