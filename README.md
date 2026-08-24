@@ -26,7 +26,7 @@ DigiCafe is a real-time, multi-user WebRTC application that allows users to inst
 
 1. Clone the repository
 ```bash
-git clone https://github.com/dhruv-dhemare/WebRTC_BiFrost
+git clone https://github.com/dhruv-dhemare/DigiCafe
 cd WEBRTC
 ```
 
